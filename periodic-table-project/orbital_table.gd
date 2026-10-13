@@ -1,8 +1,9 @@
 extends Control
 
 const SLOTS := 32
-const R_BASE := 90.0
-const R_STEP := 50.0
+const R_BASE := 112.0
+const R_STEP := 46.33   # R_BASE + 6 * R_STEP = 390, so the outer ring is unchanged
+const HUB_R := 92.0
 const PANEL_W := 340.0
 const A0_PM := 52.9
 const MAX_RESULTS := 6
@@ -578,7 +579,7 @@ func _node_pos(e: Dictionary) -> Vector2:
 
 func _node_r(e: Dictionary) -> float:
 	var spacing := TAU * _ring_r(e.period) / SLOTS
-	return clampf(spacing * 0.46, 8.0, 22.0) * sc
+	return clampf(spacing * 0.40, 8.0, 22.0) * sc
 
 
 func _pick(pos: Vector2) -> int:
@@ -788,7 +789,7 @@ func _draw_geometry(active: int) -> void:
 
 
 func _draw_hub(_idx: int) -> void:
-	var hr := 74.0 * sc
+	var hr := HUB_R * sc
 	draw_circle(center, hr, Color("10142a"))
 	draw_arc(center, hr, 0.0, TAU, 96, Color(1, 1, 1, 0.15), 1.5, true)
 	# idle title fades out as the atom fades in
@@ -814,7 +815,7 @@ func _draw_hub(_idx: int) -> void:
 		var cnt: int = shells[n]
 		if cnt == 0:
 			continue
-		var rr := (14.0 + 8.2 * n) * sc * sm
+		var rr := (16.0 + 10.2 * n) * sc * sm
 		draw_arc(center, rr, 0.0, TAU, 64, Color(1, 1, 1, 0.12 * am), 1.0, true)
 		var spd := 1.6 / pow(float(n), 0.9) * (1.0 if n % 2 == 0 else -1.0)
 		for k in cnt:
@@ -886,7 +887,7 @@ func _draw_pair_line(a_i: int, b_i: int) -> void:
 	var ang_a := _slot_angle(a.slot + 0.5)
 	var ang_b := _slot_angle(b.slot + 0.5)
 	var dlt := wrapf(ang_b - ang_a, -PI, PI)
-	draw_arc(center, 79.0 * sc, ang_a, ang_a + dlt * prog, 40, Color(col, 0.9), 3.0 * sc, true)
+	draw_arc(center, (HUB_R + 5.0) * sc, ang_a, ang_a + dlt * prog, 40, Color(col, 0.9), 3.0 * sc, true)
 
 
 func _draw_nodes(active: int) -> void:
