@@ -4,7 +4,7 @@ const SLOTS := 32
 const R_BASE := 112.0
 const R_STEP := 46.33   # R_BASE + 6 * R_STEP = 390, so the outer ring is unchanged
 const HUB_R := 92.0
-const PANEL_W := 340.0
+const PANEL_W := 390.0
 const A0_PM := 52.9
 const MAX_RESULTS := 6
 # spellings that differ from the names stored in DATA
@@ -64,6 +64,33 @@ const REL_COLORS := {
 	"twin": Color("3ddc84"),
 	"opposite": Color("ff4d4d"),
 }
+
+# Element category colors (used by mode 6 and the filter chips)
+const CAT_COLORS := {
+	"Alkali metal": Color("ff6b57"), "Alkaline earth": Color("ffa94d"),
+	"Transition metal": Color("4895ef"), "Post-transition": Color("9aa5b8"),
+	"Lanthanide": Color("c77dff"), "Actinide": Color("ff7eb6"),
+	"Metalloid": Color("38c9a0"), "Nonmetal": Color("7bd88f"),
+	"Halogen": Color("ffe14d"), "Noble gas": Color("5ce1e6"),
+}
+# [chip label, chip color, categories it matches]
+const FILTERS := [
+	["Metals", Color("b8c0d0"), ["Alkali metal", "Alkaline earth", "Transition metal",
+		"Post-transition", "Lanthanide", "Actinide"]],
+	["Nonmetals", Color("7bd88f"), ["Nonmetal", "Halogen", "Noble gas"]],
+	["Alkali metal", Color("ff6b57"), ["Alkali metal"]],
+	["Alkaline earth", Color("ffa94d"), ["Alkaline earth"]],
+	["Transition metal", Color("4895ef"), ["Transition metal"]],
+	["Post-transition", Color("9aa5b8"), ["Post-transition"]],
+	["Lanthanide", Color("c77dff"), ["Lanthanide"]],
+	["Actinide", Color("ff7eb6"), ["Actinide"]],
+	["Metalloid", Color("38c9a0"), ["Metalloid"]],
+	["Other nonmetals", Color("7bd88f"), ["Nonmetal"]],
+	["Halogen", Color("ffe14d"), ["Halogen"]],
+	["Noble gas", Color("5ce1e6"), ["Noble gas"]],
+]
+const CHIP_ROW := 28.0
+
 const DIAGONALS := [[3, 12], [4, 13], [5, 14]]  # Li-Mg, Be-Al, B-Si
 
 # Slater effective principal quantum numbers
@@ -139,7 +166,7 @@ var elements: Array = []
 var rel: Dictionary = {}    # element index -> relation kind
 var hovered := -1
 var selected := -1
-var mode := 0               # 0 block, 1 EN, 2 Zeff, 3 radius
+var mode := 0               # 0 block, 1 EN, 2 Zeff, 3 radius, 4 Slater radius, 5 category
 var t := 0.0
 var font: Font
 
@@ -151,6 +178,10 @@ var search: LineEdit
 var search_hits: Array = []        # element indices matching the query
 var search_idx := 0                # highlighted row in the results list
 var _result_rects: Array = []      # Rect2 per visible result row
+
+var cat_filter := -1               # index into FILTERS, -1 = off
+var chip_h := 0.0                  # height of the chip bar at the top
+var _chip_rects: Array = []
 
 var z_min := 99.0
 var z_max := 0.0
@@ -558,11 +589,41 @@ func _refresh() -> void:
 # ========================================================== input ========
 
 func _layout() -> void:
-	var avail := Vector2(size.x - PANEL_W, size.y)
+	_layout_chips()
+	var avail := Vector2(size.x - PANEL_W, size.y - chip_h)
 	# full wheel incl. rim labels is ~935 units across; 980 leaves a margin
 	base_sc = clampf(minf(avail.x, avail.y) / 980.0, 0.3, 2.0)
 	sc = base_sc * zoom
-	center = Vector2(PANEL_W + avail.x * 0.5, size.y * 0.5) + pan
+	center = Vector2(PANEL_W + avail.x * 0.5, chip_h + avail.y * 0.5) + pan
+
+
+# Category chips across the top of the wheel area; wraps to more rows if narrow
+func _layout_chips() -> void:
+	_chip_rects.clear()
+	var x0 := PANEL_W + 14.0
+	var x := x0
+	var y := 10.0
+	for f in FILTERS:
+		var w := font.get_string_size(f[0], HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x + 30.0
+		if x + w > size.x - 14.0 and x > x0:
+			x = x0
+			y += CHIP_ROW
+		_chip_rects.append(Rect2(x, y, w, 22.0))
+		x += w + 6.0
+	chip_h = y + 32.0
+
+
+func _chip_at(pos: Vector2) -> int:
+	for k in _chip_rects.size():
+		if (_chip_rects[k] as Rect2).has_point(pos):
+			return k
+	return -1
+
+
+func _in_filter(e: Dictionary) -> bool:
+	if cat_filter == -1:
+		return true
+	return e.cat in FILTERS[cat_filter][2]
 
 
 func _slot_angle(slot: float) -> float:
@@ -583,7 +644,7 @@ func _node_r(e: Dictionary) -> float:
 
 
 func _pick(pos: Vector2) -> int:
-	if pos.x < PANEL_W:
+	if pos.x < PANEL_W or _chip_at(pos) != -1:
 		return -1
 	var best := -1
 	var best_d := 1e9
@@ -631,6 +692,10 @@ func _gui_input(event: InputEvent) -> void:
 					_refresh()
 		elif bi == MOUSE_BUTTON_LEFT:
 			if event.pressed:
+				var kc := _chip_at(event.position)
+				if kc != -1:
+					cat_filter = -1 if kc == cat_filter else kc
+					return
 				var kr := _row_at(event.position)
 				if kr != -1:
 					search_idx = kr
@@ -673,13 +738,17 @@ func _unhandled_key_input(event: InputEvent) -> void:
 				search.grab_focus.call_deferred()
 				get_viewport().set_input_as_handled()
 			KEY_ESCAPE:
-				selected = -1
-				_refresh()
+				if selected != -1:
+					selected = -1
+					_refresh()
+				else:
+					cat_filter = -1
 			KEY_1: mode = 0
 			KEY_2: mode = 1
 			KEY_3: mode = 2
 			KEY_4: mode = 3
 			KEY_5: mode = 4
+			KEY_6: mode = 5
 			KEY_EQUAL, KEY_KP_ADD:
 				_zoom_at(center, 1.25)
 			KEY_MINUS, KEY_KP_SUBTRACT:
@@ -708,6 +777,8 @@ func _node_color(e: Dictionary) -> Color:
 			if e.cov <= 0.0:
 				return Color("4a4f63")
 			return _ramp((e.cov - c_min) / (c_max - c_min))
+		5:
+			return CAT_COLORS[e.cat]
 	return _ramp((e.radius - r_min) / (r_max - r_min))
 
 
@@ -747,8 +818,25 @@ func _draw() -> void:
 	_draw_nodes(active)
 	if active != -1:
 		_draw_dots(active)
+	_draw_chips()
 	_draw_tooltip()
 	_draw_panel(active, pair)
+
+
+func _draw_chips() -> void:
+	# opaque strip so the zoomed wheel never runs under the chips
+	draw_rect(Rect2(PANEL_W, 0.0, size.x - PANEL_W, chip_h), Color("0b0e1a"))
+	draw_line(Vector2(PANEL_W, chip_h), Vector2(size.x, chip_h), Color(1, 1, 1, 0.08), 1.0)
+	var mp := get_local_mouse_position()
+	for i in FILTERS.size():
+		var r: Rect2 = _chip_rects[i]
+		var col: Color = FILTERS[i][1]
+		var on := i == cat_filter
+		draw_rect(r, Color(col, 0.28 if on else (0.14 if r.has_point(mp) else 0.06)))
+		draw_rect(r, Color(col, 0.95 if on else 0.45), false, 1.5 if on else 1.0)
+		draw_circle(r.position + Vector2(11.0, 11.0), 4.0, col)
+		draw_string(font, r.position + Vector2(22.0, 15.0), FILTERS[i][0],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 1.0 if on else 0.8))
 
 
 func _draw_geometry(active: int) -> void:
@@ -938,6 +1026,10 @@ func _draw_node(i: int, active: int, pair: int, rf: float, pf: float) -> void:
 		var sp := 0.5 + 0.5 * sin(t * 5.0)
 		draw_arc(p, r + (3.0 + 2.0 * sp) * sc, 0.0, TAU, 32,
 			Color(0.35, 0.9, 1.0, 0.9), 2.0 * sc, true)
+	# category filter: ring matching elements in their category color
+	if cat_filter != -1 and i != active and i != pair and _in_filter(e):
+		draw_arc(p, r + 5.0 * sc, 0.0, TAU, 32,
+			Color(CAT_COLORS[e.cat], 0.9 * a), 2.0 * sc, true)
 
 
 func _draw_tooltip() -> void:
@@ -963,9 +1055,18 @@ func _pline(txt: String, fs: int, color: Color = Color.WHITE, gap: float = 4.0) 
 	draw_string(font, Vector2(24.0, _py), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, c)
 
 
+func _psection(txt: String, color: Color) -> void:
+	# Compact section divider: colored heading with a fine rule beneath it.
+	_py += 17.0
+	var c := Color(color.r, color.g, color.b, color.a * _pa)
+	draw_string(font, Vector2(24.0, _py), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, c)
+	draw_line(Vector2(24.0, _py + 4.0), Vector2(PANEL_W - 24.0, _py + 4.0),
+		Color(color.r, color.g, color.b, 0.28 * _pa), 1.0)
+
+
 func _legend_bar(lo_txt: String, hi_txt: String) -> void:
 	var x0 := 24.0
-	var w := 220.0
+	var w := 250.0
 	var y0 := _py + 6.0
 	for k in 44:
 		draw_rect(Rect2(x0 + k * w / 44.0, y0, w / 44.0 + 1.0, 8.0), _ramp(k / 43.0))
@@ -982,15 +1083,15 @@ func _draw_panel(active: int, pair: int) -> void:
 	draw_rect(Rect2(0.0, 0.0, PANEL_W, size.y), Color("0b0e1a"))
 	draw_line(Vector2(PANEL_W, 0.0), Vector2(PANEL_W, size.y), Color(1, 1, 1, 0.08), 1.0)
 	_py = 14.0
-	_pline("ORBITAL PERIODIC TABLE", 20, Color.WHITE, 4.0)
-	_pline("rings = periods  |  angle = subshell slot", 11, dim, 10.0)
+	_pline("ORBITAL PERIODIC TABLE", 21, Color.WHITE, 5.0)
+	_pline("Rings = periods  |  angle = subshell slot", 12, dim, 10.0)
 	_py += 40.0   # space for the search box
 
 	var names := ["Block (s / p / d / f)", "Electronegativity",
 		"Effective nuclear charge", "Atomic radius (measured)",
-		"Orbital radius (Slater est.)"]
-	for m in 5:
-		_pline("[%d]  %s" % [m + 1, names[m]], 12, gold if m == mode else dim, 2.0)
+		"Orbital radius (Slater est.)", "Category (metal / nonmetal / ...)"]
+	for m in 6:
+		_pline("[%d]  %s" % [m + 1, names[m]], 13, gold if m == mode else dim, 3.0)
 	match mode:
 		0:
 			_py += 8.0
@@ -1013,6 +1114,8 @@ func _draw_panel(active: int, pair: int) -> void:
 		4:
 			_legend_bar("%.0f pm" % r_min, "%.0f pm" % r_max)
 			_pline("Slater vs measured: Pearson r = %.2f" % radius_corr, 10, dim, 2.0)
+		5:
+			_pline("Colors match the category chips above", 10, dim, 2.0)
 
 	_py += 10.0
 	if active == -1:
@@ -1021,27 +1124,36 @@ func _draw_panel(active: int, pair: int) -> void:
 	else:
 		var e: Dictionary = elements[active]
 		var ecol: Color = BLOCK_COLORS[e.block]
+		# A quiet card separates the selected element's facts from the mode controls.
+		draw_rect(Rect2(12.0, _py - 2.0, PANEL_W - 24.0, maxf(0.0, size.y - _py - 158.0)), Color("11172a"))
 		_pa = detail_fade                          # details fade and slide in
 		_py += (1.0 - detail_fade) * 10.0
-		_pline("%s  (%s)" % [e.name, e.sym], 22, ecol.lightened(0.25), 4.0)
-		_pline("Z %d   mass %.3f   %s" % [e.z, e.mass, e.cat], 12, Color(1, 1, 1, 0.85), 3.0)
+		_pline("%s  (%s)" % [e.name, e.sym], 24, ecol.lightened(0.3), 5.0)
+		var cat_col: Color = CAT_COLORS.get(e.cat, ecol)
+		# Keep the element name clean; use color and section labels to organize details.
+		_pline("ATOMIC NUMBER  %d     MASS  %.3f" % [e.z, e.mass], 13, Color.WHITE, 2.0)
+		_pline("CATEGORY  %s" % e.cat, 14, cat_col.lightened(0.2), 4.0)
 		var grp: String = "f-block" if e.col == 0 else "group %d" % e.col
-		_pline("period %d   %s   %s" % [e.period, grp, e.block + "-block"], 12, Color(1, 1, 1, 0.85), 3.0)
-		_pline("slot %d / 32  (%.1f deg)" % [e.slot, (e.slot + 0.5) * 360.0 / SLOTS], 12, Color(1, 1, 1, 0.85), 8.0)
+		_pline("Period %d   %s   %s" % [e.period, grp, e.block + "-block"], 13, Color(1, 1, 1, 0.9), 3.0)
+		_pline("Slot %d / 32  (%.1f deg)" % [e.slot, (e.slot + 0.5) * 360.0 / SLOTS], 13, Color(1, 1, 1, 0.9), 5.0)
 
-		_pline("Configuration", 10, dim, 1.0)
-		_pline(e.cfg_str, 14, Color.WHITE, 4.0)
+		# Distinct colored section headings make each group of facts easier to scan.
+		_psection("ELECTRON STRUCTURE", Color("79c8ff"))
+		_pline("Electron configuration", 11, dim, 1.0)
+		_pline(e.cfg_str, 15, Color.WHITE, 4.0)
 		var sh: PackedStringArray = []
 		for n in range(1, 8):
 			if e.shells[n] > 0:
 				sh.append(str(e.shells[n]))
-		_pline("Shells  " + " ".join(sh), 12, Color(1, 1, 1, 0.85), 3.0)
-		_pline("Valence e-  %s" % (str(e.val) if e.val >= 0 else "variable (f-block)"),
-			12, Color(1, 1, 1, 0.85), 3.0)
+		_pline("Electron shells  " + "  ".join(sh), 13, Color(1, 1, 1, 0.9), 4.0)
+		_psection("CHEMICAL PROPERTIES", Color("ffd166"))
+		_pline("Valence electrons  %s" % (str(e.val) if e.val >= 0 else "variable (f-block)"),
+			13, Color(1, 1, 1, 0.9), 4.0)
 		var en_txt: String = "none" if e.en <= 0.0 else "%.2f" % e.en
-		_pline("Electronegativity  %s" % en_txt, 12, Color(1, 1, 1, 0.85), 3.0)
-		_pline("Zeff (Slater)  %.2f" % e.zeff, 12, Color(1, 1, 1, 0.85), 3.0)
-		_pline("Oxidation states  %s" % _ox_string(e), 12, Color(1, 1, 1, 0.85), 3.0)
+		_pline("Electronegativity  %s" % en_txt, 13, Color(1, 1, 1, 0.9), 4.0)
+		_pline("Effective nuclear charge  %.2f" % e.zeff, 13, Color(1, 1, 1, 0.9), 4.0)
+		_pline("Oxidation states  %s" % _ox_string(e), 13, Color(1, 1, 1, 0.9), 4.0)
+		_psection("ATOMIC RADIUS", Color("a7e8a0"))
 		var cov: float = e.cov
 		var est: float = e.radius
 		if cov > 0.0:
@@ -1051,7 +1163,7 @@ func _draw_panel(active: int, pair: int) -> void:
 		else:
 			_pline("Radius  no measured data  |  %.0f pm Slater" % est, 11,
 				Color(1, 1, 1, 0.85), 3.0)
-		if mode >= 3:
+		if mode == 3 or mode == 4:
 			_radius_bars(e)
 
 		if pair != -1:
@@ -1090,7 +1202,7 @@ func _draw_panel(active: int, pair: int) -> void:
 
 	# Legend + hints, pinned to the bottom (skipped if the content needs the room)
 	_pa = 1.0
-	var by := size.y - 134.0
+	var by := size.y - 148.0
 	if _py < by - 8.0:
 		_draw_legend(by)
 	_draw_search_results()
@@ -1102,9 +1214,9 @@ func _build_search() -> void:
 	search = LineEdit.new()
 	search.placeholder_text = "Search element...   ( / )"
 	search.clear_button_enabled = true
-	search.position = Vector2(24, 64)
-	search.size = Vector2(PANEL_W - 48.0, 28)
-	search.add_theme_font_size_override("font_size", 13)
+	search.position = Vector2(24, 66)
+	search.size = Vector2(PANEL_W - 48.0, 32)
+	search.add_theme_font_size_override("font_size", 15)
 	search.text_changed.connect(_on_search_changed)
 	search.text_submitted.connect(_on_search_submitted)
 	search.gui_input.connect(_on_search_gui_input)
@@ -1405,7 +1517,7 @@ func _predict_compounds(a: Dictionary, b: Dictionary) -> Array:
 # Two bars: Slater estimate vs measured covalent radius, on a shared scale
 func _radius_bars(e: Dictionary) -> void:
 	var x0 := 24.0
-	var w := 230.0
+	var w := 260.0
 	var mx := maxf(c_max, r_max)
 	var est: float = e.radius
 	var meas: float = e.cov
@@ -1444,6 +1556,7 @@ func _draw_legend(by_start: float) -> void:
 		"Lock one, hover another = bond analysis",
 		"Wheel zoom (%.1fx) | Drag pan | R reset" % zoom,
 		"/ or Ctrl+F = search   Esc = clear",
+		"Top chips filter by category | 6 = color by it",
 	]
 	for h in hints:
 		draw_string(font, Vector2(24, by), h, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, dim)
@@ -1511,10 +1624,15 @@ func _sync_focus() -> void:
 
 func _target_alpha(i: int, active: int) -> float:
 	var e: Dictionary = elements[i]
+	var hit := _in_filter(e)
 	if active != -1:
 		if i == active or rel.has(i):
 			return 1.0
+		if cat_filter != -1:
+			return 0.6 if hit else 0.1
 		return 0.5 if e.period == elements[active].period else 0.16
+	if cat_filter != -1 and not hit:
+		return 0.12
 	if not search_hits.is_empty() and not search_hits.has(i):
 		return 0.14
 	return 1.0
@@ -1557,6 +1675,7 @@ func _update_cursor() -> void:
 	var shape: Control.CursorShape = Control.CURSOR_ARROW
 	if drag_moved and press_active:
 		shape = Control.CURSOR_DRAG
-	elif hovered != -1 or _row_at(get_local_mouse_position()) != -1:
+	elif hovered != -1 or _row_at(get_local_mouse_position()) != -1 \
+			or _chip_at(get_local_mouse_position()) != -1:
 		shape = Control.CURSOR_POINTING_HAND
 	mouse_default_cursor_shape = shape
